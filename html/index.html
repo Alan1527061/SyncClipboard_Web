@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Clipboard">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f2f2f7">
+<title>Alan's Clipboard</title>
+<style>
+  /* ===== 配色：iOS 系统色 —— 浅灰底 + 纯白气泡 + 单一蓝色强调 ===== */
+  :root {
+    --bg: #ffffff;        /* 纯白底，和苹果信息一致（原来是 f2f2f7，偏冷灰 */
+    --bubble: #e9e9eb;    /* 收到的消息用浅灰气泡，白底上才看得出来 */
+    --sheet: #ffffff;     /* 弹窗底色 */
+    --fg: #1c1c1e;
+    --muted: #8e8e93;
+    --line: rgba(60,60,67,.13);
+    --fill: rgba(120,120,128,.12);
+    --accent: #0071e3;
+    --accent-down: #0062c3;
+    --send: #07c160;      /* 发送键：微信那种绿 */
+    --send-down: #06ad56;
+    --ok: #1a8f4a;
+    --err: #d70015;
+    --bar-solid: rgba(251,251,253,.44);  /* 顶栏：44% 磨砂玻璃 */
+    /* 底栏那两块（输入胶囊 + ＋ 圆珠）：半透明白 + 一点点毛玻璃。
+       2026-09-20 用户定的：.38→.20（要更透）→ .32（滑页面看着乱）→ **.50 + blur 6px**（要一点毛玻璃）。
+       ⚠️ 空框时那个 ↑ 用下面的 --glass-thin，**故意比胶囊淡**：
+       它要像"搭在胶囊上面的一块玻璃"，跟胶囊一个色就看不出叠了一层。 */
+    --glass: rgba(255,255,255,.50);
+    --glass-thin: rgba(255,255,255,.22);
+    --glass-shadow: 0 0 0 .5px var(--line), 0 10px 30px -14px rgba(0,0,0,.30);
+    --bubble-shadow: none;   /* 灰气泡不需要投影（苹果信息也没有） */
+    /* 文件卡片（照用户给的微信参考图）：白底卡片。页面也是白的，所以必须描一圈细边+一道浅投影，
+       不然白卡片和白页面糊在一起。深色模式下换成深灰卡（见下面 dark 那段），白的会刺眼 */
+    --card: #ffffff;
+    --card-shadow: 0 0 0 .5px var(--line), 0 1px 2px rgba(0,0,0,.05);
+    /* 底部安全区（Home 指示条那条）。
+       ⚠️ 这个值在 Safari 和"加到主屏幕"里不一样：
+         Safari —— 屏幕最下面那一条被地址栏占着，网页够不到 → 0
+         独立窗口 —— 网页铺满整屏，那条归网页管 → 设备真实值（刘海机 34px）
+       所以凡是"贴着屏幕底"的东西都得用 --sab，不能写死数字，
+       否则两种模式下必然有一个是错的。键盘弹起时再把它清零，见 html.kb */
+    --sab: env(safe-area-inset-bottom, 0px);
+    --compGap: 12px;         /* 输入栏离屏幕底（或键盘顶）留的空隙 */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --bubble: #262629;
+      --sheet: #1c1c1e;
+      --fg: #f2f2f7;
+      --muted: #8e8e93;
+      --line: rgba(255,255,255,.14);
+      --fill: rgba(120,120,128,.28);
+      --accent: #0a84ff;
+      --accent-down: #3a9bff;
+      --send: #0ac06a;
+      --send-down: #22d47d;
+      --ok: #30d158;
+      --err: #ff453a;
+      --bar-solid: rgba(22,22,23,.52);
+      --glass: rgba(40,40,44,.58);     /* 深色模式跟浅色同比例走 */
+      --glass-thin: rgba(40,40,44,.40);  /* ↑ 在深色下跟原来一样（别改） */
+      --bubble-shadow: none;
+      --card: #2c2c2e;
+      --card-shadow: 0 0 0 .5px var(--line);
+    }
+  }
+
+  /* 键盘弹起时，Home 指示条被键盘盖住/收起了，那 34px 安全区就不该再占位。
+     不清零的话，独立窗口里输入栏会浮在键盘上方 34px 处 —— 就是"输入框和键盘之间空一条"。
+     （Safari 里本来就没有这条，只影响"加到主屏幕"后的独立窗口。）
+     类加在 <html> 上而不是 .app，因为 #toast / #spinner 是 body 的直接子元素、不在 .app 里 */
+  html.kb { --sab: 0px; }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body {
+    color: var(--fg); background: var(--bg);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+    letter-spacing: -.01em; -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- 整页一个大框 ---------- */
+  .app { position: fixed; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+
+  /* ---------- 顶栏（毛玻璃）。标题本身就是刷新按钮 ---------- */
+  /* 照苹果官网：细窄一条 + 发丝线，右侧纯图标（没有圆形底） */
+  header {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+    display: flex; align-items: center; gap: 6px;
+    padding: calc(env(safe-area-inset-top) + 9px) 16px 9px;
+    background: var(--bar-solid);
+    /* 顶栏保持磨砂（20px 已经够糊；原来是 34px，纯粹是白花性能） */
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-transform: translateZ(0); transform: translateZ(0);
+  }
+  header h1 {
+    flex: 1; min-width: 0; margin: 0; padding: 2px 0;
+    font-size: 17px; font-weight: 600; letter-spacing: -.02em; color: var(--fg);
+    white-space: nowrap; overflow: hidden;
+  }
+  header h1:active { opacity: .45; }
+  /* 图标没底，但按钮本身留 34px 的透明点击区，不然太细点不准 */
+  .tools { display: flex; gap: 10px; flex: none; align-items: center; }
+  .tools button {
+    width: 34px; height: 34px; padding: 0; border: 0; border-radius: 0;
+    background: none; color: var(--fg);
+    display: grid; place-items: center;
+    transition: opacity .15s ease;
+  }
+  .tools button svg { width: 21px; height: 21px; display: block; }
+  .tools button:active { opacity: .4; }
+
+  /* ---------- 中间的消息流 ---------- */
+  /* ⚠️ 铺满整屏（inset:0），靠上下 padding 给顶栏/输入栏让位 —— **不要**改成"夹在两栏之间"。
+     内容必须从两块毛玻璃底下穿过去，玻璃后面有色块才看得出"磨砂"，否则就是一层死的白底。
+     代价：滚动条属于这个框，所以它会贯穿整屏 —— 从顶栏底下伸出来、再插进输入栏里。
+     （2026-09-20 两种都试过：先改成夹在两栏之间，用户看完嫌玻璃没质感，又改回铺满整屏。） */
+  .stream {
+    position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    /* 上：顶栏高度 + 10px；下：输入栏高度 + 底部安全区 + 空隙 + 8px。
+       ⚠️ 底部的 --sab 必须算进去：漏了它的话，独立窗口（加到主屏幕）里滚到底时
+       最后一条气泡会被输入栏压住（见踩坑 12） */
+    padding: calc(var(--headH, 56px) + 10px) 14px calc(var(--compH, 56px) + var(--sab) + var(--compGap) + 8px);
+  }
+  .bubble {
+    position: relative;      /* 给下面的 .flash 光圈当定位基准 */
+    /* ⚠️ width: fit-content 是必须的：气球要**贴着内容收边**（苹果信息那样 —— 发两个字就是两个字的宽）。
+       不写的话块级元素一律撑满 max-width，短句子也会占一整条。
+       ⚠️ 但 max-width 一定要留着：长句子在这里折行（86%；图片气泡另给 72%，见下）。 */
+    width: fit-content;
+    max-width: 86%; margin: 0 0 10px; padding: 11px 14px;
+    background: var(--bubble); border-radius: 18px 18px 18px 6px;
+    box-shadow: var(--bubble-shadow);
+    /* 文字/文件气泡：长按交给自己的菜单，所以关掉系统选中，免得两个手势打架 */
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  .bubble.text { font-size: 15.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+  /* 文件气泡：照用户给的微信参考图 —— **固定宽的白色卡片**：
+     左边文件名（最多两行、超出打省略号）+ 左下角文件大小，右边一个大号彩色图标块。
+     （2026-09-20 之前是"按内容收边的灰气泡"，用户给了参考图让改成这样） */
+  .bubble.attach {
+    /* 固定宽，但跟着屏幕走：用户要"占手机屏宽 65%"（他的 iPhone 16 Pro Max 逻辑宽 440pt → ≈286px）。
+       取 min() 是为了电脑上开大窗口时不至于撑成一条巨卡；窄屏由下面的 max-width 兜底。
+       ⚠️ 用 vw 而不是 %：百分比是按"流的可用宽"算的（那样算不出"占屏幕 65%"）。vw 不受 iOS 地址栏影响。 */
+    width: min(65vw, 288px);
+    max-width: 78%;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'name ico' 'size ico';
+    column-gap: 10px; row-gap: 1px;
+    align-items: center;
+    background: var(--card);
+    box-shadow: var(--card-shadow);
+  }
+  .bubble.attach .fname {
+    grid-area: name; align-self: end;
+    font-size: 15.5px; line-height: 1.3; word-break: break-all;   /* 和文字气泡同号（用户要"放大一些些"） */
+    /* 最多两行，再长就省略号 —— 跟参考图里那个两行的文件名一样 */
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .bubble.attach .fsize { grid-area: size; align-self: start; font-size: 12px; color: var(--muted); }
+  /* 右侧图标块：我们没有各家软件的 logo，就用"配色块 + 扩展名"代替（形状/位置跟参考图一致） */
+  .bubble.attach .fbadge {
+    grid-area: ico; flex: none;
+    width: 42px; height: 42px; border-radius: 11px;
+    display: grid; place-items: center;
+    background: #8e8e93; color: #fff;
+    font-size: 11px; font-weight: 700; letter-spacing: .01em;
+  }
+  .bubble.attach .fbadge.c-pdf  { background: #d93025; }
+  .bubble.attach .fbadge.c-doc  { background: #2b579a; }
+  .bubble.attach .fbadge.c-xls  { background: #217346; }
+  .bubble.attach .fbadge.c-ppt  { background: #d24726; }
+  .bubble.attach .fbadge.c-zip  { background: #b8860b; }
+  .bubble.attach .fbadge.c-txt  { background: #607d8b; }
+  .bubble.attach .fbadge.c-cal  { background: #7a5af8; }
+  /* ⚠️ 自己发的文件卡片也统一成白卡片（用户要求"什么文件气泡都是固定大小白气泡"）：
+     .bubble.out 的绿底/白字在后面才定义、会盖住这里，所以必须显式改回来，否则是"绿卡片+深色字"很难看。
+     区分"我发的"靠**靠右对齐**（跟微信文件卡片一样，两边都是白的）。 */
+  .bubble.out.attach { background: var(--card); color: var(--fg); }
+  /* 图片气泡：照苹果信息那样**缩小预览**（2026-09-20 用户嫌一张图占太大地儿）。
+     - 宽度上限 66%（原来跟文字气泡一样是 86%）：横图不再顶满一行
+     - 再加高度上限 400px：竖屏长截图（整屏截图那种）不会一路拖下去；比例由 max-width/max-height 自动保持
+     - width: fit-content 让气泡**贴着图收边**（不然图被高度限窄了，灰底还撑在 66% 那么宽）
+     ⚠️ 高度用 px 不用 vh：iOS Safari 的 vh 取"大视口"，地址栏在的时候比可视区高一截。 */
+  .bubble.media { padding: 4px; width: fit-content; max-width: 72%; }
+  /* 图片例外：保留 iOS 原生长按菜单（存储到照片 / 拷贝），比我们下载好用 */
+  .bubble.media { -webkit-user-select: auto; user-select: auto; -webkit-touch-callout: default; }
+  .bubble img { display: block; max-width: 100%; max-height: 400px; border-radius: 12px; }
+  /* （`.bubble .fname` 的通用样式已并入上面的 `.bubble.attach .fname`） */
+  .bubble .fico {
+    width: 34px; height: 34px; flex: none; border-radius: 9px;
+    display: grid; place-items: center; background: var(--fill);
+  }
+  .bubble .fico svg { width: 18px; height: 18px; }
+
+  /* ---------- 自己在手机上发出去的：绿色、靠右（像对话）---------- */
+  /* 服务端 history 记录里没有"来源设备"字段，所以这个 class 是本地记出来的：
+     app.js 里发成功时把 hash 存进 localStorage，渲染时对得上就加 .out（见 markSent / isMine） */
+  .bubble.out {
+    margin-left: auto; margin-right: 0;     /* 块级元素 + auto 左边距 = 靠右；宽度仍受 max-width 限制 */
+    background: var(--send); color: #fff;
+    border-radius: 18px 18px 6px 18px;      /* 小尖角从左下换到右下 */
+  }
+  .bubble.out .fico { background: rgba(255,255,255,.22); }   /* 灰底图标块在半透明下会发脏 */
+  .bubble.out .attach .meta span { color: rgba(255,255,255,.78); }
+  /* 图片不加绿色底板（苹果信息也是这样），只保留圆角照片本身 */
+  .bubble.out.media { background: transparent; padding: 0; }
+
+  /* （"当前电脑剪贴板那条描一圈蓝边"已经去掉 —— 用户不要这个标记。
+     样式表里已经没有 .now 规则，app.js 也不再挂这个 class。） */
+
+  .sep { text-align: center; font-size: 11.5px; color: var(--muted); margin: 6px 0 12px; }
+  .empty { text-align: center; color: var(--muted); font-size: 14px; padding: 40px 0; }
+
+  /* ---------- 底部：三块各自独立的玻璃 ---------- */
+  .composer {
+    position: absolute; z-index: 20;
+    left: 16px; right: 16px; bottom: calc(var(--sab) + var(--compGap));
+    display: flex; align-items: flex-end; gap: 8px;
+  }
+  /* ⚠️ 模糊半径是这类"叠在滚动内容上的毛玻璃"的性能大头：
+     每帧都要把底下的滚动内容重新模糊一遍，成本 ≈ 面积 × 半径²。
+     加 translateZ(0) 把玻璃提成独立合成层 —— iOS Safari 上毛玻璃叠滚动区会闪、会跳，这条能压住。 */
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    backdrop-filter: saturate(180%) blur(12px);
+    box-shadow: var(--glass-shadow);
+    -webkit-transform: translateZ(0); transform: translateZ(0);
+  }
+  /* 底栏那两块（输入胶囊 + ＋ 圆珠）：半透明白 + **一点点毛玻璃**。
+     2026-09-20 用户要"只要一点点"，所以 blur 只给 6px（原来顶栏 20px / 菜单 12px）——
+     既有一点点磨砂质感，又不会像 12px 那样每帧重算得厉害（这块是整页面积最大的玻璃）。
+     ⚠️ 空框时那个 ↑ 不加 blur：它就叠在胶囊上，胶囊已经糊过了，再叠一层属于"嵌套毛玻璃"、白花性能。 */
+  .composer .glass {
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+  .fab {
+    width: 46px; height: 46px; flex: none; padding: 0; border: 0; border-radius: 50%;
+    display: grid; place-items: center; color: var(--fg);
+    transition: transform .12s ease, opacity .12s ease, background .15s ease;
+  }
+  .fab svg { width: 22px; height: 22px; display: block; }
+  .fab:active { transform: scale(.9); }
+  /* 发送键在输入胶囊内部右端（照微信那个样子） */
+  .sendbtn {
+    width: 46px; height: 32px; flex: none; padding: 0; border: 0; border-radius: 16px;
+    background: var(--send); color: #fff; display: grid; place-items: center;
+    transition: transform .12s ease, opacity .12s ease, background .15s ease;
+  }
+  .sendbtn svg { width: 19px; height: 19px; display: block; }
+  .sendbtn:active { transform: scale(.93); background: var(--send-down); }
+  .sendbtn:disabled { background: var(--fill); color: var(--muted); }
+  /* 输入框空着时：它不是"发送"，是"粘贴手机剪贴板并发送"（见 doSend），
+     所以不做成绿色（那会让人以为已经能发送），也不置灰（灰的看着像不能点）——
+     做成**一块叠在输入框上的高透玻璃**：半透明白 + 一圈细边，跟底栏玻璃同一个色值。
+     ⚠️ 这里不用 backdrop-filter：输入胶囊自己已经是毛玻璃了，再叠一层 blur 是"嵌套毛玻璃"，
+     每帧都要重算、白花性能；半透明色盖在已经是模糊的底上，看起来是一样的。
+     ⚠️ 位置放在 :disabled 之后：发送过程中会短暂 disabled，这时保持玻璃样，别闪一下灰的。 */
+  .sendbtn.ghost {
+    background: var(--glass-thin);          /* 比胶囊淡一档：才像"搭在输入框上的一块玻璃" */
+    color: var(--fg);
+    box-shadow: 0 0 0 .5px var(--line);
+  }
+  .sendbtn.ghost:active { transform: scale(.93); background: rgba(255,255,255,.36); }
+  .cbox {
+    flex: 1; min-width: 0; border-radius: 23px; padding: 0 6px 0 16px;
+    min-height: 46px; display: flex; align-items: center; gap: 6px;
+  }
+  #sendText {
+    width: 100%; border: 0; outline: none; background: transparent; color: var(--fg);
+    font: inherit; font-size: 16px; line-height: 22px;
+    padding: 8px 0; margin: 0; resize: none; overflow-y: auto;
+    min-height: 34px; max-height: 132px;
+  }
+  #sendText::placeholder { color: var(--muted); }
+  /* ⚠️ 必须显式写这条：.attach 自己带 display:flex，会盖掉浏览器对 hidden 属性的 display:none，
+     结果"隐藏"的附件区仍占着输入框一半宽度（文字框被挤窄、占位文字折行） */
+  .attach[hidden] { display: none; }
+  .attach { display: flex; align-items: center; gap: 10px; width: 100%; padding: 3px 0; }
+  .attach img { width: 38px; height: 38px; object-fit: cover; border-radius: 9px; flex: none; }
+  .attach .fico {
+    width: 38px; height: 38px; flex: none; border-radius: 9px;
+    display: grid; place-items: center; background: var(--fill);
+  }
+  .attach .fico svg { width: 18px; height: 18px; }
+  .attach .meta { flex: 1; min-width: 0; }
+  .attach .meta b { display: block; font-size: 13.5px; font-weight: 500;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .attach .meta span { font-size: 11.5px; color: var(--muted); }
+  .attach .x {
+    width: 28px; height: 28px; flex: none; border: 0; border-radius: 50%;
+    background: var(--fill); color: var(--muted); display: grid; place-items: center;
+  }
+  .attach .x svg { width: 14px; height: 14px; }
+
+  /* ---------- 浮动提示 ---------- */
+  #toast {
+    position: fixed; left: 50%; bottom: calc(var(--compH, 56px) + var(--sab) + var(--compGap) + 14px);
+    transform: translate(-50%, 12px); opacity: 0; z-index: 200; pointer-events: none;
+    background: rgba(28,28,30,.92); color: #fff; font-size: 13.5px; line-height: 1.4;
+    padding: 10px 18px; border-radius: 999px; max-width: 84vw; text-align: center;
+    -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    transition: opacity .22s ease, transform .22s ease;
+  }
+  #toast.err { background: rgba(215,0,21,.94); }
+
+  /* ---------- 连不上服务器时的转圈 ---------- */
+  #spinner { position: fixed; inset: 0; display: grid; place-items: center;
+             z-index: 150; pointer-events: none; }
+  #spinner .box {
+    background: rgba(28,28,30,.82); border-radius: 20px; padding: 22px 26px;
+    display: grid; justify-items: center; gap: 12px;
+    -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    box-shadow: 0 20px 50px -16px rgba(0,0,0,.55);
+  }
+  #spinner .ring {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 2.5px solid rgba(255,255,255,.22); border-top-color: #fff;
+    animation: spin .8s linear infinite;
+  }
+  #spinner .txt { color: #fff; font-size: 13px; opacity: .9; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- 弹窗（搜索 / 收藏 / 设置） ---------- */
+  dialog {
+    border: 0; border-radius: 22px; padding: 16px; color: var(--fg); background: var(--sheet);
+    box-shadow: 0 24px 60px -12px rgba(0,0,0,.35);
+    width: min(94vw, 440px);
+    margin-top: 12px; margin-bottom: auto;
+    max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
+    overflow: auto;
+  }
+  dialog:focus, dialog:focus-visible { outline: none; }
+  dialog::backdrop { background: rgba(0,0,0,.34); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  dialog h3 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.02em; }
+  .dlg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .dlg-head .spacer { flex: 1; }
+  dialog label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 5px; }
+  dialog input[type=text], dialog input[type=password], dialog input[type=number], dialog input[type=search] {
+    width: 100%; font: inherit; font-size: 16px; color: var(--fg); background: var(--fill);
+    border: 1px solid transparent; border-radius: 13px; padding: 11px 14px; outline: none;
+  }
+  dialog input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,113,227,.18); }
+  dialog input:disabled { opacity: .4; }
+  .switch { display: flex; align-items: center; gap: 9px; font-size: 15px; color: var(--fg); margin-top: 16px; }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+  dialog button { font: inherit; font-size: 15px; font-weight: 500; }
+  .btn { min-height: 40px; padding: 0 18px; border: 0; border-radius: 980px;
+         background: var(--fill); color: var(--fg); }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.sm { min-height: 34px; padding: 0 14px; font-size: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .hint { font-size: 12.5px; color: var(--muted); margin-top: 12px; line-height: 1.5; }
+
+  /* 浏览器默认靠 dialog:not([open]) 隐藏弹窗，作者样式优先级更高，写 display 必须带 [open] */
+  dialog:not([open]) { display: none; }
+  .listdlg[open] { display: flex; flex-direction: column;
+                   max-height: 86vh; max-height: min(86dvh, 720px); }
+  dialog[open] { animation: pop .2s cubic-bezier(.32,.72,0,1); }
+  @keyframes pop { from { opacity: 0; transform: scale(.97) translateY(8px); } }
+  .itemlist { flex: 1; min-height: 120px; overflow: auto; overscroll-behavior: contain; margin-top: 4px; }
+  .hist-item { display: flex; gap: 12px; padding: 13px 0; border-top: 1px solid var(--line);
+               align-items: flex-start; }
+  .hist-item:first-child { border-top: 0; padding-top: 2px; }
+  .hist-main { flex: 1; min-width: 0; }
+  .hist-text { font-size: 13.5px; line-height: 1.45; word-break: break-word; max-height: 4.4em;
+               overflow: hidden; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; }
+  .hist-meta { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 11px;
+           background: var(--fill); flex: none; cursor: pointer; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px;
+         border-radius: 999px; margin-right: 7px; background: var(--fill); color: var(--muted); }
+  .tag.t-image { background: rgba(0,113,227,.10); color: #0b63c4; }
+  .tag.t-file  { background: rgba(120,60,220,.10); color: #6a3fd0; }
+  .hist-acts { display: flex; flex-direction: column; gap: 6px; flex: none; }
+  .hist-acts .starred { color: #d9a400; }
+  /* 长按气泡弹出的菜单 */
+  .ctxmenu {
+    position: absolute; z-index: 40; min-width: 152px; padding: 6px;
+    border-radius: 16px;
+    box-shadow: 0 16px 44px -14px rgba(0,0,0,.42), 0 0 0 .5px var(--line);
+    animation: pop .14s ease-out;
+  }
+  .ctxmenu button {
+    width: 100%; display: block; text-align: left; padding: 11px 14px;
+    border: 0; border-radius: 11px; background: transparent; color: var(--fg);
+    font: inherit; font-size: 15.5px;
+  }
+  .ctxmenu button:active { background: var(--fill); }
+  /* 弹窗里也要能看见提示：弹窗在 top layer，z-index 再高的普通元素都被盖住，所以提示要放进弹窗内部 */
+  .dtoast {
+    position: absolute; left: 0; right: 0; bottom: 12px; text-align: center;
+    pointer-events: none; opacity: 0; transition: opacity .2s ease; z-index: 5;
+  }
+  .dtoast span {
+    display: inline-block; background: rgba(28,28,30,.92); color: #fff;
+    font-size: 13px; padding: 8px 16px; border-radius: 999px; max-width: 90%;
+  }
+  .dtoast.show { opacity: 1; }
+  .dtoast.err span { background: rgba(215,0,21,.94); }
+  /* 刚发出去的那条闪一下。
+     ⚠️ 别直接动画 box-shadow：那会让这块区域逐帧重绘，底下的毛玻璃还得跟着重新模糊一遍，
+     发消息那一下就会卡/闪。改成「静态画好一个光圈 + 只动画它的 opacity」→ 只走合成，不重绘。 */
+  .bubble::after {
+    content: ''; position: absolute; inset: -3px; border-radius: inherit;
+    box-shadow: 0 0 0 3px rgba(0,113,227,.5);
+    opacity: 0; pointer-events: none;
+  }
+  .bubble.flash::after { animation: flash 1.1s ease; }
+  @keyframes flash { 0%, 100% { opacity: 0; } 35% { opacity: 1; } }
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+  <header id="topbar">
+    <h1 id="brand" title="点一下刷新">
+      Alan's Clipboard
+    </h1>
+    <div class="tools">
+      <button id="btnSearch" aria-label="搜索" title="搜索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+      </button>
+      <button id="btnStar" aria-label="收藏" title="收藏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/>
+        </svg>
+      </button>
+      <button id="btnSettings" aria-label="设置" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round">
+          <path d="M4 7.6h16"/><path d="M4 16.4h16"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="stream" id="stream"></main>
+
+  <!-- 底部：加号圆珠 / 输入框 / 发送箭头 三块各自独立的玻璃 -->
+  <div class="composer" id="composer">
+    <button class="fab glass" id="btnPlus" aria-label="添加图片或文件" title="添加">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <div class="cbox glass" id="cbody">
+      <textarea id="sendText" rows="1" placeholder="粘贴或输入文字…"
+                autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+      <div class="attach" id="attach" hidden></div>
+      <!-- 这个 ↑ 有两种身份（用户 2026-09-20 定的）：
+           输入框**空着**时 = "粘贴手机剪贴板并发送"；有文字/选了图时 = 普通发送。
+           ⚠️ 所以它**永远不能 disabled**（空着也得能点）。样式一个字没改。 -->
+      <button class="sendbtn" id="btnSend" aria-label="发送" title="发送（输入框空着时＝粘贴手机剪贴板并发送）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 19V5M5 12l7-7 7 7"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <input type="file" id="pickAny" multiple hidden>
+</div>
+
+<!-- 搜索（原来的历史记录，去掉标题；每次打开清空关键词） -->
+<dialog id="dlgSearch" class="listdlg">
+  <div class="dlg-head">
+    <input type="search" id="q" placeholder="搜索文字内容…" style="flex:1; min-width:110px">
+    <button id="btnDoSearch" class="btn sm">搜索</button>
+    <button id="btnSearchClose" class="btn sm">关闭</button>
+  </div>
+  <div id="searchList" class="itemlist"></div>
+  <div class="row" style="margin-top:10px">
+    <button id="btnPrev" class="btn sm">← 上一页</button>
+    <span style="flex:1"></span>
+    <small id="pageInfo" style="color:var(--muted);font-size:12px"></small>
+    <span style="flex:1"></span>
+    <button id="btnNext" class="btn sm">下一页 →</button>
+  </div>
+</dialog>
+
+<!-- 收藏 -->
+<dialog id="dlgStar" class="listdlg">
+  <div class="dlg-head">
+    <h3>收藏</h3>
+    <span class="spacer"></span>
+    <small id="starInfo" style="color:var(--muted);font-size:12px"></small>
+    <button id="btnStarClear" class="btn sm">清除全部</button>
+    <button id="btnStarClose" class="btn sm">关闭</button>
+  </div>
+  <div id="starList" class="itemlist"></div>
+</dialog>
+
+<!-- 设置 -->
+<dialog id="dlg">
+  <h3>设置</h3>
+  <label>SyncClipboard 用户名</label>
+  <input type="text" id="inUser" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label>密码</label>
+  <input type="password" id="inPass">
+  <label>刷新间隔（秒）</label>
+  <input type="number" id="inInt" min="1" max="600" step="1" inputmode="numeric">
+  <label class="switch"><input type="checkbox" id="inAuto"> 自动刷新</label>
+  <label class="switch"><input type="checkbox" id="inCompress"> 图片上传前自动压缩</label>
+  <div class="row" style="margin-top:16px">
+    <button id="btnSave" class="btn primary">保存</button>
+    <button id="btnTest" class="btn sm">测试连接</button>
+    <span style="flex:1"></span>
+    <button id="btnClose" class="btn sm">关闭</button>
+  </div>
+  <div id="dlgMsg" class="hint"></div>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>
