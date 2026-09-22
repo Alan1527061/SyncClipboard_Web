@@ -1,0 +1,21 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Information"
+    }
+  },
+  "AllowedHosts": "*",
+  "Kestrel": {
+    "Endpoints": {
+      "http": {
+        "Url": "http://127.0.0.1:5033"
+      }
+    }
+  },
+  "AppSettings": {
+    "UserName": "<your-username>",
+    "Password": "<your-password>",
+    "MaxSavedHistoryCount": 1000
+  }
+}
