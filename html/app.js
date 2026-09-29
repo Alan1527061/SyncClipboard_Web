@@ -1039,8 +1039,16 @@ function revealCurrent() {
 
 function onPick(e) {
   const f = e.target.files && e.target.files[0];
-  e.target.value = '';
-  if (!f) return;
+  if (e.target.value !== undefined) e.target.value = '';
+  if (!f) {
+    // 用户取消了选择 → 什么都不做。
+    // ⚠️ 这里**原来**是 `if (isAndroid) $('pickAny').click();`（注释写的是"保证有反应"），
+    //    可 pickAny 是 `accept="*/*"`，一点就弹出安卓那个"相机拍照/相机录像/发文件"三选一 ——
+    //    等于**每取消一次就再糊一个选择器**，正是用户 2026-09-28 烦的东西，删掉。
+    //    而且它根本兜不到想兜的情况：选择器要是压根没打开，change 事件**不会来**，
+    //    能走到这儿的只有"用户真的取消了"这一种，所以删掉它没有副作用。
+    return;
+  }
   const isImg = /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|heic|bmp)$/i.test(f.name);
   setComposer(isImg ? 'image' : 'file', f);
 }
@@ -1395,6 +1403,21 @@ function boot() {
     if (comp.kind === 'image' || comp.kind === 'file') setComposer('text');
     autoGrow(); updateSendBtn(); bumpMetrics();
   });
+  // 回车键的行为**按设备分**（用户 2026-09-28 定，之前是一刀切对所有设备都发送）：
+  //   电脑：Enter 发送，Shift+Enter 换行
+  //   手机/平板：Enter 就是换行 —— 手机软键盘上那个回车键本来就该是换行键，
+  //              打字时手一滑就发出去太难受了（用户报的问题）。
+  // ⚠️ 判断不能只看 UA：iPadOS 13+ 的 Safari 把自己伪装成 Mac（UA 里是 "Macintosh"），
+  //    所以再用 maxTouchPoints 兜一层（没有触屏 Mac，误判概率可忽略）。
+  const enterInsertsNewline = /android|iphone|ipod|ipad/i.test(navigator.userAgent)
+    || (/macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  $('sendText').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (enterInsertsNewline) return;   // 手机/平板：不拦，交给浏览器插换行
+    if (e.shiftKey) return;            // 电脑：Shift+Enter 也插换行
+    e.preventDefault();
+    doSend();
+  });
   // 点输入框要打字时：不管当前翻到哪儿，都把视图带回最底部那条消息
   $('sendText').addEventListener('focus', () => {
     setTimeout(bumpMetrics, 300);
@@ -1403,8 +1426,75 @@ function boot() {
   });
   $('btnSend').addEventListener('click', doSend);
 
-  // ＋ 直接唤起系统选择器（照片图库 / 拍照或录像 / 选取文件）
-  $('btnPlus').addEventListener('click', () => $('pickAny').click());
+  // ＋ 按钮：
+  //   安卓（Chrome）：弹"拍照 / 相册 / 发文件"菜单 —— 安卓对单个 file input 会弹
+  //     "拍照/录像/选文件"三合一，控制不了文案和顺序，拆成带约束的独立 input
+  //   苹果 / 电脑：维持原来的直接唤起系统选择器（iOS 那个"照片/视频/选文件"
+  //     action sheet 本来就是对的，不要动）
+  const isAndroid = /android/i.test(navigator.userAgent);
+
+  // 安卓"发文件"专用的 accept：**故意不含 image/*、video/*、audio/***（用户 2026-09-28 定）。
+  //   安卓的系统文件选择器只要 accept 里出现这三个之一 —— 连 `*/*` 也算 —— 就会自作主张
+  //   在顶部塞一个"能用这个类型的 App"入口：image→相机拍照、video→相机录像、audio→录音机。
+  //   于是"发文件"点下去又蹦出个二选一/三选一，兜一圈回到起点。
+  //   拆开之后："📷 拍照"走 image/* + capture、"🖼️ 相册"走 image/*，这里只留非媒体的纯文件。
+  //   ⚠️ 代价：**这个入口里没有视频、也没有音频了**（相册只认 image/*）。用户 2026-09-28 确认
+  //      不常发视频，先这样；真要发就照下面格式往菜单数组里加一项（`['📹 视频','video/*',null]`）。
+  //   ⚠️ **`audio/*` 也不能留**（2026-09-28 当场踩了）：安卓会再招来一个"录音机"入口
+  //      （录音机 App 声明自己能返回 audio/*），于是选择器又变成"录音机 / 文件"二选一。
+  //      同理心记：**这一类 accept 通配符就是"哪些 App 能应答"的名单**，
+  //      image→相机、video→摄录机、audio→录音机，所以要"只剩文件"就只能都不写。
+  //   `application/*` 已经盖得住 pdf/doc/zip/apk，以及"扩展名不认识 → application/octet-stream"的文件。
+  const FILE_ACCEPT = 'application/*,text/*';
+
+  function openPickWithConstraints(accept, capture) {
+    // 拍照/相册/发文件统一走这里：新建一个带约束的 input，Chrome 就只出对应的那个选择器，
+    // 不混"录像/文件"。**用完即弃**，页面里那个 pickAny 是苹果/电脑那条原路，别动它。
+    // ⚠️ 以前"发文件"是抄 pickAny 的，而 pickAny 上写着 `accept="*/*"` —— 正是它把相机那两项招回来的。
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = accept;
+    if (capture) inp.setAttribute('capture', capture);
+    inp.addEventListener('change', onPick, { once: true });
+    document.body.appendChild(inp);
+    inp.click();
+    inp.remove();
+  }
+  let plusMenu = null;
+  function closePlusMenu() {
+    if (plusMenu) { plusMenu.remove(); plusMenu = null; }
+    document.removeEventListener('click', onDocClickToClose, true);
+  }
+  function onDocClickToClose(e) {
+    if (plusMenu && !e.target.closest('#plusMenu') && e.target !== $('btnPlus')) closePlusMenu();
+  }
+  function showPlusMenu() {
+    const m = document.createElement('div');
+    m.id = 'plusMenu';
+    [['📷 拍照', 'image/*', 'environment'], ['🖼️ 相册', 'image/*', null], ['📄 发文件', FILE_ACCEPT, null]]
+      .forEach(([label, accept, capture]) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          closePlusMenu();
+          openPickWithConstraints(accept, capture);
+        });
+        m.appendChild(b);
+      });
+    document.body.appendChild(m);
+    const br = $('btnPlus').getBoundingClientRect();
+    m.style.left = br.left + 'px';
+    m.style.bottom = 'calc(100vh - ' + br.top + 'px)';
+    plusMenu = m;
+    setTimeout(() => document.addEventListener('click', onDocClickToClose, true), 0);
+  }
+  $('btnPlus').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!isAndroid) { $('pickAny').click(); return; }   // 苹果/电脑：原样
+    if (plusMenu) { closePlusMenu(); return; }
+    showPlusMenu();
+  });
   $('pickAny').addEventListener('change', onPick);
 
   // 滚到顶部就加载更早的记录

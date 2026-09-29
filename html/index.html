@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-title" content="Clipboard">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#f2f2f7">
+<link rel="icon" type="image/png" sizes="512x512" href="/assets/icon-512.png">
+<link rel="apple-touch-icon" href="/assets/icon-512.png">
+<meta name="mobile-web-app-capable" content="yes">
 <title>Alan's Clipboard</title>
 <style>
   /* ===== 配色：iOS 系统色 —— 浅灰底 + 纯白气泡 + 单一蓝色强调 ===== */
@@ -305,6 +308,27 @@
   }
   .attach .x svg { width: 14px; height: 14px; }
 
+  /* ＋ 弹出小菜单：跟底栏同一套玻璃 */
+  #plusMenu {
+    position: fixed; z-index: 90; padding: 6px;
+    border-radius: 18px;
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 148px;
+    background: var(--glass);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    backdrop-filter: saturate(180%) blur(12px);
+    box-shadow: var(--glass-shadow);
+    -webkit-transform: translateZ(0); transform: translateZ(0);
+    animation: pop .14s ease-out;
+  }
+  #plusMenu button {
+    display: flex; align-items: center; gap: 9px;
+    padding: 10px 14px; border: 0; border-radius: 13px;
+    background: transparent; color: var(--fg);
+    font: inherit; font-size: 15px; text-align: left;
+  }
+  #plusMenu button:active { background: var(--fill); }
+
   /* ---------- 浮动提示 ---------- */
   #toast {
     position: fixed; left: 50%; bottom: calc(var(--compH, 56px) + var(--sab) + var(--compGap) + 14px);
@@ -473,7 +497,7 @@
     </div>
   </div>
 
-  <input type="file" id="pickAny" multiple hidden>
+  <input type="file" id="pickAny" multiple accept="*/*" hidden>
 </div>
 
 <!-- 搜索（原来的历史记录，去掉标题；每次打开清空关键词） -->
