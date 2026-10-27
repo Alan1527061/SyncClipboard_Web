@@ -7,8 +7,9 @@
 <meta name="apple-mobile-web-app-title" content="Clipboard">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#f2f2f7">
-<link rel="icon" type="image/png" sizes="512x512" href="/assets/icon-512.png">
-<link rel="apple-touch-icon" href="/assets/icon-512.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/assets/icon-512-white.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/assets/icon-512-white.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/icon-180-white.png">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Alan's Clipboard</title>
 <style>
@@ -307,6 +308,39 @@
     background: var(--fill); color: var(--muted); display: grid; place-items: center;
   }
   .attach .x svg { width: 14px; height: 14px; }
+
+  /* ---------- 多选排队（2026-10-20）：一排缩略图横向滚动 ----------
+     单个时保持上面那套"缩略图 + 文件名 + 大小"；多个时只露缩略图，
+     序号角标标明发送顺序，右上角 × 单个移除。
+     ⚠️ 不要换成自动播放的缩略图网格 —— 输入栏高度会随数量跳，键盘弹起时很乱。 */
+  .attach.multi {
+    overflow-x: auto; overflow-y: hidden;
+    gap: 10px; padding: 4px 0 3px;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .attach.multi::-webkit-scrollbar { display: none; }
+  .attach.multi .aitem { flex: none; position: relative; display: block; }
+  .attach.multi .aitem img,
+  .attach.multi .aitem .fico { width: 46px; height: 46px; border-radius: 11px; }
+  .attach.multi .aitem .no {
+    position: absolute; left: 4px; bottom: 4px;
+    min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
+    background: rgba(0,0,0,.55); color: #fff;
+    font-size: 10.5px; line-height: 15px; text-align: center;
+  }
+  .attach.multi .x {
+    position: absolute; top: 0; right: 0;
+    width: 20px; height: 20px; border-radius: 0 11px 0 10px;
+    background: rgba(0,0,0,.5); color: #fff;
+  }
+  .attach.multi .x svg { width: 11px; height: 11px; }
+  .attach .sum {
+    flex: none; align-self: center; padding-right: 8px;
+    font-size: 11.5px; color: var(--muted); white-space: nowrap;
+  }
+  /* 批量发送中：↑ 轻轻呼吸，表示"还在一个个传" */
+  .sendbtn.busy { animation: busyPulse 1.1s ease-in-out infinite; }
+  @keyframes busyPulse { 50% { opacity: .5; } }
 
   /* ＋ 弹出小菜单：跟底栏同一套玻璃 */
   #plusMenu {

@@ -45,7 +45,8 @@
 ```
 ├── html/
 │   ├── index.html         # 页面本体：全部 UI + CSS
-│   └── app.js             # 全部逻辑：轮询、认证、渲染、缓存、贴底、菜单
+│   ├── app.js             # 全部逻辑：轮询、认证、渲染、缓存、贴底、菜单
+│   └── assets/             # 浏览器和 iOS 主屏图标
 ├── nginx.conf             # 部署关键：静态页 + API 反代，WebDAV 兼容
 ├── deploy/
 │   └── config.example.json  # SyncClipboard 服务端配置示例（脱敏）

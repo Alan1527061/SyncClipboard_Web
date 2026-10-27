@@ -737,11 +737,21 @@ async function pollCurrent(force) {
 
 /* ==================== 底部输入栏 ==================== */
 
-const comp = { kind: null, file: null, objUrl: null };
+/* comp.queue：待发的附件列表（2026-10-20 加多选）。可以有**多个**（＋ 里多选的文件会依次排队），
+   每个元素 { kind:'image'|'file', file:File, objUrl:缩略图URL|null }。
+   ⚠️ 只有一个附件时也要走队列 —— 别再写回"单个 file"那套，两条路早晚会分叉。
+   ⚠️ objUrl 是缩略图专用的，拿它当上传源？不行：图片上传可能要走 compressImage，原 File 更准。 */
+const comp = { kind: null, queue: [] };
+
+function releaseThumbs() {
+  for (const it of comp.queue) {
+    if (it.objUrl) { URL.revokeObjectURL(it.objUrl); it.objUrl = null; }
+  }
+}
 
 function clearComposer() {
-  if (comp.objUrl) { URL.revokeObjectURL(comp.objUrl); comp.objUrl = null; }
-  comp.kind = null; comp.file = null;
+  releaseThumbs();
+  comp.kind = null; comp.queue = [];
   $('sendText').value = '';
   $('attach').innerHTML = '';
   $('attach').hidden = true;
@@ -751,47 +761,111 @@ function clearComposer() {
   bumpMetrics();
 }
 
-function setComposer(kind, file) {
-  if (comp.objUrl) { URL.revokeObjectURL(comp.objUrl); comp.objUrl = null; }
-  comp.kind = kind; comp.file = file || null;
-  const at = $('attach'), ta = $('sendText');
+function fileKind(f) {
+  return /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|heic|bmp)$/i.test(f.name) ? 'image' : 'file';
+}
 
-  if (kind === 'image' || kind === 'file') {
-    ta.hidden = true;
-    at.hidden = false;
+/** 往队列里加文件（顺序就是用户在选择器里勾选的顺序）。
+    ⚠️ 选择器的 files 顺序由系统决定，安卓上就是列表顺序 —— 不是按大小/时间排的，
+       所以别自作主张排序，用户要的是"按顺序一个一个传"。 */
+function addFiles(files) {
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  for (const file of list) {
+    const kind = fileKind(file);
+    comp.queue.push({ kind, file, objUrl: kind === 'image' ? URL.createObjectURL(file) : null });
+  }
+  comp.kind = 'attach';
+  renderComposer();
+}
+
+function setComposer(kind, file) {
+  releaseThumbs();
+  comp.queue = [];
+  comp.kind = kind;
+  if (file) {
+    const k = fileKind(file);
+    comp.queue.push({ kind: k, file, objUrl: k === 'image' ? URL.createObjectURL(file) : null });
+  }
+  renderComposer();
+}
+
+/** 按 comp.queue 重画底部附件区（单个 = 现在这种一行；多个 = 一排小卡片横着滚） */
+function renderComposer() {
+  const at = $('attach'), ta = $('sendText');
+  const q = comp.queue;
+
+  if (!q.length) {
+    ta.hidden = false;
+    at.hidden = true;
     at.innerHTML = '';
+    updateSendBtn();
+    bumpMetrics();
+    return;
+  }
+
+  ta.hidden = true;
+  at.hidden = false;
+  at.innerHTML = '';
+  at.classList.toggle('multi', q.length > 1);
+
+  q.forEach((it, idx) => {
+    const card = document.createElement('div');
+    card.className = 'aitem';
 
     let thumb;
-    if (kind === 'image') {
+    if (it.kind === 'image') {
       thumb = document.createElement('img');
-      comp.objUrl = URL.createObjectURL(file);
-      thumb.src = comp.objUrl;
+      thumb.src = it.objUrl;
+      thumb.alt = '';
     } else {
       thumb = document.createElement('div');
       thumb.className = 'fico';
       thumb.innerHTML = FILE_ICON;
     }
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const b = document.createElement('b');
-    b.textContent = file.name || (kind === 'image' ? '照片' : '文件');
-    const sp = document.createElement('span');
-    sp.textContent = fmtSize(file.size) + (kind === 'image' ? ' · 图片' : ' · 文件');
-    meta.appendChild(b); meta.appendChild(sp);
+
+    // 多个时只露缩略图 + 角标序号；单个时保持原来的"缩略图 + 文件名 + 大小"（不倒退观感）
+    if (q.length === 1) {
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const b = document.createElement('b');
+      b.textContent = it.file.name || (it.kind === 'image' ? '照片' : '文件');
+      const sp = document.createElement('span');
+      sp.textContent = fmtSize(it.file.size) + (it.kind === 'image' ? ' · 图片' : ' · 文件');
+      meta.appendChild(b); meta.appendChild(sp);
+      card.appendChild(thumb); card.appendChild(meta);
+    } else {
+      card.appendChild(thumb);
+      const no = document.createElement('span');
+      no.className = 'no';
+      no.textContent = String(idx + 1);
+      card.appendChild(no);
+    }
 
     const x = document.createElement('button');
     x.className = 'x';
     x.setAttribute('aria-label', '移除');
     x.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"' +
                   ' stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-    x.addEventListener('click', clearComposer);
+    x.addEventListener('click', () => {
+      if (it.objUrl) URL.revokeObjectURL(it.objUrl);
+      comp.queue.splice(idx, 1);
+      if (!comp.queue.length) { clearComposer(); return; }
+      renderComposer();
+    });
+    card.appendChild(x);
 
-    at.appendChild(thumb); at.appendChild(meta); at.appendChild(x);
-  } else {
-    ta.hidden = false;
-    at.hidden = true;
-    at.innerHTML = '';
+    at.appendChild(card);
+  });
+
+  if (q.length > 1) {
+    const sum = document.createElement('span');
+    sum.className = 'sum';
+    sum.textContent = '共 ' + q.length + ' 个';
+    at.appendChild(sum);
+    at.scrollLeft = at.scrollWidth;      // 刚加的排在右边，滚过去让人看见
   }
+
   updateSendBtn();
   bumpMetrics();
 }
@@ -804,7 +878,7 @@ function updateSendBtn() {
   const btn = $('btnSend');
   if (!btn) return;
   btn.disabled = false;
-  const has = comp.kind ? !!comp.file : $('sendText').value.trim().length > 0;
+  const has = comp.kind === 'attach' ? comp.queue.length > 0 : $('sendText').value.trim().length > 0;
   btn.classList.toggle('ghost', !has);
 }
 
@@ -865,22 +939,46 @@ async function doSend() {
   if (btn.disabled) return;
   // 输入框空着（也没选附件）→ 这个 ↑ 就是"粘贴手机剪贴板并发送"（用户 2026-09-20 定的）：
   // 好处是**没有歧义** —— ↑ 本来就是"我要发东西"的动作键，不像"点输入框"那样分不清想粘贴还是想打字
-  if (!comp.kind && !$('sendText').value.trim()) {
+  if (comp.kind !== 'attach' && !$('sendText').value.trim()) {
     await pasteAndSend();
     return;
   }
   btn.disabled = true;
   try {
-    // 两个分支都把 hash 返回回来 —— 不用 currentHash 那个全局，
-    // 免得刚好有次自动轮询在中间把它改成"电脑当前剪贴板"的 hash
-    let sentHash;
-    if (comp.kind === 'image' || comp.kind === 'file') {
-      sentHash = await uploadOne(comp.file, comp.kind);
-    } else {
-      const t = $('sendText').value;
-      if (!t.trim()) return;
-      sentHash = await sendTextNow(t);
+    if (comp.kind === 'attach' && comp.queue.length) {
+      // 多个附件：**按队列顺序一个一个传**（用户 2026-10-20 要的）。
+      // ⚠️ 必须是"串行 + 每个都等上一个彻底写完再发下一个" —— 服务端只有"当前剪贴板"一个槽位，
+      //    并发上传会让几条消息抢同一个槽，最后电脑上只看到最后一个、历史里的顺序也乱。
+      // ⚠️ 失败的**不中断后面的**：一个文件传挂了，用户还是要剩下那些；最后统一报"成功 n/共 m"。
+      // ⚠️ 队列要在开始时拷一份：上传过程中用户可能又点了 ＋ 加文件，别把新加的误算进这一批。
+      const batch = comp.queue.slice();
+      let lastHash = null, ok = 0, firstErr = null;
+      btn.classList.add('busy');
+      for (let i = 0; i < batch.length; i++) {
+        const it = batch[i];
+        const tag = batch.length > 1 ? '（' + (i + 1) + '/' + batch.length + '）' : '';
+        if (batch.length > 1) toast('正在发送' + tag + '…', null, true);
+        try {
+          lastHash = await uploadOne(it.file, it.kind);
+          markSent(lastHash);
+          ok++;
+        } catch (e) {
+          if (!firstErr) firstErr = e;
+        }
+      }
+      clearComposer();
+      if (!ok) toast('发送失败：' + (firstErr ? firstErr.message : '未知错误'), 'err');
+      else if (ok < batch.length) toast('已发送 ' + ok + '/' + batch.length + '（有 ' + (batch.length - ok) + ' 个失败）', 'err');
+      else toast(batch.length > 1 ? '已全部发送（' + ok + ' 个）' : '已发送');
+      await loadStream(true, false, true);
+      revealCurrent();
+      return;
     }
+
+    let sentHash;
+    const t = $('sendText').value;
+    if (!t.trim()) return;
+    sentHash = await sendTextNow(t);
     markSent(sentHash);      // 记成"我发的" → 渲染成绿色靠右
     clearComposer();
     toast('已发送');
@@ -889,6 +987,7 @@ async function doSend() {
   } catch (e) {
     toast('发送失败：' + e.message, 'err');
   } finally {
+    btn.classList.remove('busy');
     updateSendBtn();
   }
 }
@@ -1038,9 +1137,9 @@ function revealCurrent() {
 }
 
 function onPick(e) {
-  const f = e.target.files && e.target.files[0];
+  const files = Array.from(e.target.files || []);
   if (e.target.value !== undefined) e.target.value = '';
-  if (!f) {
+  if (!files.length) {
     // 用户取消了选择 → 什么都不做。
     // ⚠️ 这里**原来**是 `if (isAndroid) $('pickAny').click();`（注释写的是"保证有反应"），
     //    可 pickAny 是 `accept="*/*"`，一点就弹出安卓那个"相机拍照/相机录像/发文件"三选一 ——
@@ -1049,8 +1148,7 @@ function onPick(e) {
     //    能走到这儿的只有"用户真的取消了"这一种，所以删掉它没有副作用。
     return;
   }
-  const isImg = /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|heic|bmp)$/i.test(f.name);
-  setComposer(isImg ? 'image' : 'file', f);
+  addFiles(files);       // 多选就是按 files 的顺序整个排进队列
 }
 
 /* ==================== 复制 / 下载 / 收藏 ==================== */
@@ -1400,7 +1498,7 @@ function boot() {
 
   // 输入栏
   $('sendText').addEventListener('input', () => {
-    if (comp.kind === 'image' || comp.kind === 'file') setComposer('text');
+    if (comp.kind === 'attach') setComposer('text');
     autoGrow(); updateSendBtn(); bumpMetrics();
   });
   // 回车键的行为**按设备分**（用户 2026-09-28 定，之前是一刀切对所有设备都发送）：
@@ -1454,6 +1552,7 @@ function boot() {
     const inp = document.createElement('input');
     inp.type = 'file';
     inp.accept = accept;
+    inp.multiple = !capture;      // 批量：相册/文件都能一次多选（2026-10-20 用户要的）；拍照只能是单张
     if (capture) inp.setAttribute('capture', capture);
     inp.addEventListener('change', onPick, { once: true });
     document.body.appendChild(inp);

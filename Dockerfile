@@ -3,7 +3,7 @@
 # （clipweb 容器用 host 网络，127.0.0.1 即宿主机）
 FROM nginx:alpine
 
-# html/：index.html、app.js、seed.html、dev/ 静态自检页
+# html/：网页本体和运行所需图标
 COPY html/ /usr/share/nginx/html/
 
 # 自定义 server 块：/ 出静态页（只认 GET/HEAD，WebDAV 动词转给后端），
